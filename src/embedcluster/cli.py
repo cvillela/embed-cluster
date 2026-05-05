@@ -75,7 +75,11 @@ def leiden(
         export_jsonl=export_jsonl,
     )
     leiden_cfg = LeidenConfig(k=k, resolution=resolution, min_similarity=min_similarity)
-    raise NotImplementedError("Leiden pipeline implemented in Phase 5.")
+    from .pipelines.leiden_pipeline import run_leiden_pipeline
+
+    run_paths = create_run_dirs(out)
+    dataset_info = validate_inputs(embeddings, metadata)
+    run_leiden_pipeline(shared_cfg, leiden_cfg, run_paths, dataset_info)
 
 
 @app.command()
