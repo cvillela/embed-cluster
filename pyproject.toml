@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embedcluster"
+version = "0.1.0"
+description = "GPU-accelerated clustering pipelines (Leiden, HDBSCAN, spherical KMeans) for pre-extracted embeddings"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "embedcluster" }]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "pyarrow>=15.0",
+    "orjson>=3.10",
+    "tqdm>=4.66",
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydantic>=2.7",
+    "nvidia-ml-py>=12.535",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+embedcluster = "embedcluster.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "gpu: requires a CUDA GPU and RAPIDS / FAISS GPU runtime",
+]
+testpaths = ["tests"]
