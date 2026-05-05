@@ -1,4 +1,4 @@
-"""Typer CLI entrypoint. Pipeline functions are stubbed in Phase 1."""
+"""Typer CLI entrypoint."""
 
 from __future__ import annotations
 
@@ -11,8 +11,11 @@ from .config import (
     HdbscanConfig,
     KmeansConfig,
     LeidenConfig,
+    RunPaths,
     SharedConfig,
 )
+from .export import create_run_dirs
+from .validation import validate_inputs
 
 
 app = typer.Typer(
@@ -144,7 +147,11 @@ def kmeans(
         max_iter=max_iter,
         nredo=nredo,
     )
-    raise NotImplementedError("KMeans pipeline implemented in Phase 3.")
+    from .pipelines.kmeans_pipeline import run_kmeans_pipeline
+
+    run_paths = create_run_dirs(out)
+    dataset_info = validate_inputs(embeddings, metadata)
+    run_kmeans_pipeline(shared_cfg, kmeans_cfg, run_paths, dataset_info)
 
 
 def main() -> None:
