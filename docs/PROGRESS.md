@@ -5,4 +5,4 @@
 - [x] Phase 3 — KMeans pipeline (FAISS GPU spherical)
 - [x] Phase 4 — HDBSCAN pipeline (+ PCA path)
 - [x] Phase 5 — Leiden pipeline (cuVS kNN + mutual graph + cuGraph Leiden)
-- [ ] Phase 6 — Metrics, scripts, tests, README
+- [x] Phase 6 — Metrics, scripts, tests, README

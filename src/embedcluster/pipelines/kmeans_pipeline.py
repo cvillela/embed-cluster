@@ -18,7 +18,8 @@ from ..export import (
     write_run_config_json,
 )
 from ..gpu import choose_batch_size, estimate_run_memory, run_preflight_check
-from ..io import load_embeddings_mmap
+from ..io import iter_metadata_lines, load_embeddings_mmap
+from ..metrics import compute_cluster_summary
 from ..logging_utils import configure_logging, get_logger
 from ..preprocessing import compute_l2_norms, create_l2_normalized_view
 
@@ -178,22 +179,12 @@ def run_kmeans_pipeline(
     write_labels_parquet(run_paths, labels_df)
     logger.info("Wrote labels.parquet (%d rows)", n)
 
-    # Cluster summary
-    valid_rows = labels_df[~labels_df["is_noise"]]
-    if len(valid_rows) > 0:
-        summary = (
-            valid_rows.groupby("cluster_id")
-            .agg(
-                size=("row_id", "count"),
-                embedding_norm_mean=("embedding_norm", "mean"),
-                embedding_norm_std=("embedding_norm", "std"),
-            )
-            .reset_index()
-        )
-    else:
-        summary = pd.DataFrame(
-            columns=["cluster_id", "size", "embedding_norm_mean", "embedding_norm_std"]
-        )
+    # Cluster summary (with optional top-label from metadata).
+    summary = compute_cluster_summary(
+        labels_df,
+        np.asarray(norms, dtype=np.float32),
+        iter_metadata_lines(dataset_info.metadata_path),
+    )
     write_cluster_summary(run_paths, summary)
     logger.info("Wrote cluster_summary.parquet (%d clusters)", len(summary))
 

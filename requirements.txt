@@ -9,4 +9,6 @@ pydantic>=2.7
 nvidia-ml-py>=12.535
 pytest>=8.0
 
+scikit-learn>=1.4
+
 faiss-gpu-cu12>=1.10
