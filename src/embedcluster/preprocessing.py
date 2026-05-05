@@ -104,7 +104,6 @@ def fit_transform_pca_optional(
     pca = PCA(
         n_components=n_components,
         svd_solver="auto",
-        random_state=random_state,
         output_type="numpy",
     )
     logger.info("Fitting PCA (n_components=%d) on %d rows ...", n_components, len(fit_data))

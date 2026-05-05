@@ -112,7 +112,11 @@ def hdbscan(
         pca_components=_parse_optional_int(pca_components),
         cluster_selection=cluster_selection,  # type: ignore[arg-type]
     )
-    raise NotImplementedError("HDBSCAN pipeline implemented in Phase 4.")
+    from .pipelines.hdbscan_pipeline import run_hdbscan_pipeline
+
+    run_paths = create_run_dirs(out)
+    dataset_info = validate_inputs(embeddings, metadata)
+    run_hdbscan_pipeline(shared_cfg, hdbscan_cfg, run_paths, dataset_info)
 
 
 @app.command()
