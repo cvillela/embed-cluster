@@ -23,6 +23,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+runs/
+runs/*
 
 # Virtual Environments
 venv/
