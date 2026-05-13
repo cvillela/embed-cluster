@@ -1,7 +1,13 @@
 import streamlit as st
 
 from embedcluster.webapp import metrics_view, run_loader
-from embedcluster.webapp.components import audio_panel, cluster_panel, cluster_table, sidebar
+from embedcluster.webapp.components import (
+    audio_panel,
+    cluster_panel,
+    cluster_table,
+    sidebar,
+    similarity_panel,
+)
 
 st.set_page_config(page_title="embedcluster validation", layout="wide")
 st.title("embedcluster validation")
@@ -61,6 +67,16 @@ cluster_panel.render(bundle, table, selected_cluster_id)
 audio_panel.render(
     bundle,
     selected_cluster_id,
+    metadata_path=state.metadata_path,
+    audio_field=state.audio_field,
+    extra_cols=state.extra_metadata_cols,
+)
+
+st.divider()
+
+similarity_panel.render(
+    bundle,
+    embeddings_path=state.embeddings_path,
     metadata_path=state.metadata_path,
     audio_field=state.audio_field,
     extra_cols=state.extra_metadata_cols,

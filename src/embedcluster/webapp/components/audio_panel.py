@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from embedcluster.webapp import audio_sampler, metadata_loader
+from embedcluster.webapp.components import similarity_panel
 from embedcluster.webapp.run_loader import RunBundle
 
 _DEFAULT_N = 8
@@ -58,9 +59,21 @@ def render(
         st.session_state[seed_key] += 1
     seed = int(st.session_state[seed_key])
 
+    dedupe_choices = ["(none)"] + [c for c in meta.columns if c != "row_id"]
+    dedupe_field = st.selectbox(
+        "Dedupe by metadata field (one example per unique value)",
+        dedupe_choices,
+        index=0,
+        key=f"audio_dedupe_{bundle.method}",
+    )
+    dedupe_active = dedupe_field != "(none)"
+
+    cluster_size = int((bundle.labels["cluster_id"] == cluster_id).sum())
+    sample_n = cluster_size if dedupe_active else n
+
     try:
         sub = audio_sampler.sample_cluster(
-            bundle.labels, bundle.method, cluster_id, strategy, n, seed=seed
+            bundle.labels, bundle.method, cluster_id, strategy, sample_n, seed=seed
         )
     except ValueError as e:
         st.error(str(e))
@@ -69,17 +82,36 @@ def render(
         st.info("No rows in this cluster.")
         return
 
-    keep_meta_cols = [audio_field] + [c for c in extra_cols if c in meta.columns and c != audio_field]
+    keep_meta_cols = [audio_field]
+    keep_meta_cols += [c for c in extra_cols if c in meta.columns and c != audio_field]
+    if dedupe_active and dedupe_field not in keep_meta_cols:
+        keep_meta_cols.append(dedupe_field)
     joined = sub.set_index("row_id").join(meta[keep_meta_cols], how="left")
+    if dedupe_active:
+        joined = joined.dropna(subset=[dedupe_field]).drop_duplicates(
+            subset=[dedupe_field], keep="first"
+        ).head(n)
+        if joined.empty:
+            st.info(f"No rows with non-null `{dedupe_field}` in this cluster.")
+            return
 
     quality_col = audio_sampler.QUALITY_COLUMN.get(bundle.method)
     items = list(joined.iterrows())
 
     for i in range(0, len(items), _COLS_PER_ROW):
-        cols = st.columns(_COLS_PER_ROW)
+        cols = st.columns(_COLS_PER_ROW, gap="medium")
         for col, (row_id, row) in zip(cols, items[i : i + _COLS_PER_ROW]):
             with col:
-                _render_card(row_id, row, audio_field, quality_col, extra_cols)
+                with st.container(border=True):
+                    _render_card(
+                        row_id,
+                        row,
+                        audio_field,
+                        quality_col,
+                        extra_cols,
+                        button_key=f"sim_btn_{bundle.method}_{cluster_id}_{row_id}",
+                    )
+        st.write("")
 
 
 def _render_card(
@@ -88,18 +120,24 @@ def _render_card(
     audio_field: str,
     quality_col: str | None,
     extra_cols: list[str],
+    *,
+    button_key: str | None = None,
 ) -> None:
-    header = [f"row_id={row_id}"]
-    if quality_col and quality_col in row and pd.notna(row[quality_col]):
-        header.append(f"{quality_col}={float(row[quality_col]):.4f}")
-    st.caption(" · ".join(header))
-
     raw = row[audio_field]
-    if not isinstance(raw, str) or not raw:
+    has_path = isinstance(raw, str) and bool(raw)
+    resolved = Path(raw).expanduser() if has_path else None
+
+    title = resolved.name if resolved is not None else "(no path)"
+    st.markdown(f"**{title}**")
+
+    meta_bits = [f"`row_id` `{row_id}`"]
+    if quality_col and quality_col in row and pd.notna(row[quality_col]):
+        meta_bits.append(f"`{quality_col}` `{float(row[quality_col]):.4f}`")
+    st.caption(" · ".join(meta_bits))
+
+    if not has_path:
         st.warning("missing audio path in metadata")
-        return
-    resolved = Path(raw).expanduser()
-    if not resolved.exists():
+    elif not resolved.exists():
         st.warning(f"file not found: `{resolved}`")
     else:
         try:
@@ -107,7 +145,18 @@ def _render_card(
         except Exception as e:  # noqa: BLE001
             st.warning(f"audio failed: {e}")
 
-    for c in extra_cols:
-        if c in row and pd.notna(row[c]):
-            st.caption(f"{c}: {row[c]}")
-    st.code(str(resolved), language=None)
+    extras = [(c, row[c]) for c in extra_cols if c in row and pd.notna(row[c])]
+    if extras:
+        st.markdown(
+            "\n".join(f"- **{c}**: {v}" for c, v in extras)
+        )
+
+    if resolved is not None:
+        with st.expander("path", expanded=False):
+            st.code(str(resolved), language=None)
+
+    if button_key is not None:
+        if st.button("🔎 Find similar", key=button_key, width="stretch"):
+            st.session_state[similarity_panel.QUERY_KEY] = int(row_id)
+            st.session_state[similarity_panel.AUTO_RUN_KEY] = True
+            st.rerun()

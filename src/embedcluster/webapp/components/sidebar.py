@@ -1,6 +1,7 @@
 """Sidebar: runs root, run picker, external input paths."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from embedcluster.webapp import metadata_loader, run_loader
 from embedcluster.webapp.run_loader import RunSummary
 
 DEFAULT_RUNS_ROOT = "./runs"
+DEFAULT_METADATA_PATH = "/mnt/data_4tb/A-durfilter-highSNR/aggregated-embeddings/embeddings_cezanne.jsonl"
 
 
 @dataclass
@@ -18,46 +20,25 @@ class SidebarState:
     selected: RunSummary | None
     metadata_path: str
     umap_path: str
+    embeddings_path: str
     audio_field: str | None = None
     extra_metadata_cols: list[str] = field(default_factory=list)
 
 
 def _init_session_defaults() -> None:
     st.session_state.setdefault("runs_root", DEFAULT_RUNS_ROOT)
-    st.session_state.setdefault("metadata_path", "")
-    st.session_state.setdefault("umap_path", "")
+    st.session_state.setdefault(
+        "metadata_path",
+        os.environ.get("EMBEDCLUSTER_METADATA_PATH", DEFAULT_METADATA_PATH),
+    )
+    st.session_state.setdefault("umap_path", os.environ.get("EMBEDCLUSTER_UMAP_PATH", ""))
+    st.session_state.setdefault(
+        "embeddings_path",
+        os.environ.get("EMBEDCLUSTER_EMBEDDINGS_PATH", ""),
+    )
     st.session_state.setdefault("selected_run_name", None)
     st.session_state.setdefault("audio_field", None)
     st.session_state.setdefault("extra_metadata_cols", [])
-
-
-class _FileDialogUnavailable(RuntimeError):
-    pass
-
-
-def _pick_file_dialog(title: str, initial: str, filetypes: list[tuple[str, str]]) -> str | None:
-    """Native file picker via tkinter. Returns chosen path, None on user-cancel.
-
-    Raises ``_FileDialogUnavailable`` if tkinter cannot open a window
-    (e.g. headless / no $DISPLAY).
-    """
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-    except Exception as e:  # noqa: BLE001
-        raise _FileDialogUnavailable(str(e)) from e
-    try:
-        root = tk.Tk()
-    except Exception as e:  # noqa: BLE001
-        raise _FileDialogUnavailable(str(e)) from e
-    try:
-        root.withdraw()
-        root.attributes("-topmost", True)
-        initialdir = str(Path(initial).expanduser().parent) if initial else "."
-        path = filedialog.askopenfilename(title=title, initialdir=initialdir, filetypes=filetypes)
-    finally:
-        root.destroy()
-    return path or None
 
 
 def _on_pick(key: str, kinds: list[str], targets: list[str], idx_key: str, cur_key: str, show_key: str) -> None:
@@ -73,10 +54,6 @@ def _on_pick(key: str, kinds: list[str], targets: list[str], idx_key: str, cur_k
     else:
         st.session_state[key] = target
         st.session_state[show_key] = False
-
-
-def _on_close(show_key: str) -> None:
-    st.session_state[show_key] = False
 
 
 def _inapp_browser(key: str, exts: tuple[str, ...]) -> None:
@@ -127,47 +104,31 @@ def _inapp_browser(key: str, exts: tuple[str, ...]) -> None:
         format_func=lambda i: labels[i],
         key=idx_key,
     )
-    c1, c2 = st.columns([1, 1])
-    c1.button(
+    st.button(
         "Open / Pick",
         key=f"{key}_browser_pick",
         on_click=_on_pick,
         args=(key, kinds, targets, idx_key, cur_key, show_key),
+        width="stretch",
     )
-    c2.button("Close", key=f"{key}_browser_close", on_click=_on_close, args=(show_key,))
 
 
 def _path_input_with_browse(
     label: str,
     key: str,
-    filetypes: list[tuple[str, str]],
     exts: tuple[str, ...],
 ) -> None:
-    """Text input + 'Browse…' button.
-
-    Tries native (tkinter) file dialog first; on failure (e.g. headless), falls
-    back to an inline in-app directory walker. Once the native dialog has failed
-    in this session, the button just toggles the in-app browser visibility.
-    """
+    """Text input + 'Browse…' button toggling inline directory walker."""
     show_key = f"{key}_show_inapp"
-    failed_key = f"{key}_tk_failed"
+    pending_key = f"{key}_pending"
 
-    c1, c2 = st.columns([4, 1])
-    c1.text_input(label, key=key)
-    if c2.button("Browse…", key=f"{key}_browse"):
-        if st.session_state.get(failed_key, False):
-            st.session_state[show_key] = not st.session_state.get(show_key, False)
-        else:
-            try:
-                chosen = _pick_file_dialog(label, st.session_state.get(key, ""), filetypes)
-            except _FileDialogUnavailable as e:
-                st.info(f"native file dialog unavailable ({e}); using in-app browser.")
-                st.session_state[failed_key] = True
-                st.session_state[show_key] = True
-            else:
-                if chosen:
-                    st.session_state[key] = chosen
-                    st.rerun()
+    if pending_key in st.session_state:
+        st.session_state[key] = st.session_state.pop(pending_key)
+
+    st.text_input(label, key=key)
+    is_open = st.session_state.get(show_key, False)
+    if st.button("Close browser" if is_open else "Browse…", key=f"{key}_browse", width="stretch"):
+        st.session_state[show_key] = not is_open
 
     if st.session_state.get(show_key, False):
         with st.container(border=True):
@@ -237,13 +198,16 @@ def render() -> SidebarState:
         _path_input_with_browse(
             "metadata.jsonl path",
             "metadata_path",
-            filetypes=[("JSONL", "*.jsonl"), ("JSON", "*.json"), ("All files", "*.*")],
             exts=(".jsonl", ".json"),
         )
         _path_input_with_browse(
             "umap_6d.npy path (optional)",
             "umap_path",
-            filetypes=[("NumPy", "*.npy"), ("All files", "*.*")],
+            exts=(".npy",),
+        )
+        _path_input_with_browse(
+            "embeddings .npy path (raw, for similarity search)",
+            "embeddings_path",
             exts=(".npy",),
         )
 
@@ -259,6 +223,7 @@ def render() -> SidebarState:
         selected=selected,
         metadata_path=st.session_state["metadata_path"],
         umap_path=st.session_state["umap_path"],
+        embeddings_path=st.session_state["embeddings_path"],
         audio_field=audio_field,
         extra_metadata_cols=extra_cols,
     )
