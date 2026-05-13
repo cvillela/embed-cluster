@@ -19,6 +19,10 @@ def _seed_key(method: str) -> str:
     return f"audio_seed_{method}"
 
 
+def _page_key(method: str, cluster_id: int) -> str:
+    return f"audio_page_{method}_{cluster_id}"
+
+
 def render(
     bundle: RunBundle,
     cluster_id: int | None,
@@ -52,11 +56,16 @@ def render(
     strategy = c1.selectbox(
         "Strategy", strategies, key=f"audio_strategy_{bundle.method}_{cluster_id < 0}"
     )
-    n = c2.slider(
-        "N", min_value=1, max_value=_MAX_N, value=_DEFAULT_N, key=f"audio_n_{bundle.method}"
+    per_page = c2.slider(
+        "Per page",
+        min_value=1,
+        max_value=_MAX_N,
+        value=_DEFAULT_N,
+        key=f"audio_n_{bundle.method}",
     )
     if c3.button("Refresh seed", key=f"audio_refresh_{bundle.method}"):
         st.session_state[seed_key] += 1
+        st.session_state[_page_key(bundle.method, cluster_id)] = 1
     seed = int(st.session_state[seed_key])
 
     dedupe_choices = ["(none)"] + [c for c in meta.columns if c != "row_id"]
@@ -69,11 +78,10 @@ def render(
     dedupe_active = dedupe_field != "(none)"
 
     cluster_size = int((bundle.labels["cluster_id"] == cluster_id).sum())
-    sample_n = cluster_size if dedupe_active else n
 
     try:
         sub = audio_sampler.sample_cluster(
-            bundle.labels, bundle.method, cluster_id, strategy, sample_n, seed=seed
+            bundle.labels, bundle.method, cluster_id, strategy, cluster_size, seed=seed
         )
     except ValueError as e:
         st.error(str(e))
@@ -90,10 +98,36 @@ def render(
     if dedupe_active:
         joined = joined.dropna(subset=[dedupe_field]).drop_duplicates(
             subset=[dedupe_field], keep="first"
-        ).head(n)
+        )
         if joined.empty:
             st.info(f"No rows with non-null `{dedupe_field}` in this cluster.")
             return
+
+    total = len(joined)
+    n_pages = max(1, (total + per_page - 1) // per_page)
+    pkey = _page_key(bundle.method, cluster_id)
+    cur_page = int(st.session_state.get(pkey, 1))
+    if cur_page > n_pages:
+        cur_page = 1
+        st.session_state[pkey] = 1
+
+    pcol1, pcol2 = st.columns([1, 3])
+    page = pcol1.number_input(
+        "Page",
+        min_value=1,
+        max_value=n_pages,
+        value=cur_page,
+        step=1,
+        key=pkey,
+    )
+    start = (int(page) - 1) * per_page
+    end = start + per_page
+    pcol2.caption(
+        f"Showing {start + 1}–{min(end, total)} of {total}"
+        + (" (after dedupe)" if dedupe_active else "")
+        + f" · cluster size {cluster_size}"
+    )
+    joined = joined.iloc[start:end]
 
     quality_col = audio_sampler.QUALITY_COLUMN.get(bundle.method)
     items = list(joined.iterrows())

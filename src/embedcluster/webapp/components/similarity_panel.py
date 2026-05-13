@@ -13,8 +13,12 @@ from embedcluster.webapp.run_loader import RunBundle
 QUERY_KEY = "sim_query_row_id"
 AUTO_RUN_KEY = "sim_auto_run"
 _TEXT_KEY = "sim_query_text"
-_TOPK_KEY = "sim_topk"
+_PERPAGE_KEY = "sim_perpage"
+_MAXRESULTS_KEY = "sim_max_results"
 _NORMALIZE_KEY = "sim_normalize"
+_DEDUPE_KEY = "sim_dedupe_field"
+_PAGE_KEY = "sim_page"
+_RESULTS_KEY = "sim_results"
 
 
 @st.cache_resource(show_spinner="Loading embeddings (mmap)…")
@@ -159,51 +163,127 @@ def render(
     if pending is not None:
         st.session_state[_TEXT_KEY] = str(int(pending))
 
-    c1, c2, c3, c4 = st.columns([3, 1, 1, 1])
+    c1, c2, c3, c4, c5 = st.columns([3, 1, 1, 1, 1])
     query_str = c1.text_input(
         "row_id or audio path / filename",
         key=_TEXT_KEY,
     )
-    k = c2.slider("top-k", min_value=1, max_value=50, value=8, key=_TOPK_KEY)
-    normalize = c3.checkbox("cosine (normalize)", value=True, key=_NORMALIZE_KEY)
-    go = c4.button("Search", key="sim_search_btn", width="stretch")
+    per_page = c2.slider(
+        "Per page", min_value=1, max_value=50, value=8, key=_PERPAGE_KEY
+    )
+    max_results = c3.slider(
+        "Max results",
+        min_value=10,
+        max_value=min(2000, max(10, n_rows)),
+        value=min(200, max(10, n_rows)),
+        step=10,
+        key=_MAXRESULTS_KEY,
+    )
+    normalize = c4.checkbox("cosine (normalize)", value=True, key=_NORMALIZE_KEY)
+    go = c5.button("Search", key="sim_search_btn", width="stretch")
+
+    dedupe_choices = ["(none)"] + [c for c in meta.columns if c != "row_id"]
+    dedupe_field = st.selectbox(
+        "Dedupe by metadata field (one example per unique value)",
+        dedupe_choices,
+        index=0,
+        key=_DEDUPE_KEY,
+    )
+    dedupe_active = dedupe_field != "(none)"
 
     auto_run = st.session_state.pop(AUTO_RUN_KEY, False)
-    if not (go or auto_run):
+    trigger = go or auto_run
+
+    if trigger:
+        rid = _resolve_row_id(query_str, n_rows, meta, audio_field)
+        if rid is None:
+            st.warning(
+                "Could not resolve query. Enter a numeric row_id, full audio path, or filename "
+                "matching the audio-path metadata field."
+            )
+            return
+
+        with st.spinner("Searching…"):
+            backend = _build_index(str(emb_p), emb_p.stat().st_mtime, normalize)
+            X = backend[2] if backend[0] == "faiss" else backend[1]
+            q = np.asarray(X[rid], dtype=np.float32)
+            k_fetch = min(int(max_results) + 1, n_rows)
+            idx, scores = _search(backend, k_fetch, q, normalize)
+
+        pairs = [(int(i), float(s)) for i, s in zip(idx, scores) if int(i) != rid][
+            : int(max_results)
+        ]
+        st.session_state[_RESULTS_KEY] = {
+            "rid": int(rid),
+            "pairs": pairs,
+            "backend": backend[0],
+            "normalize": bool(normalize),
+        }
+        st.session_state[_PAGE_KEY] = 1
+
+    cached = st.session_state.get(_RESULTS_KEY)
+    if not cached:
         return
 
-    rid = _resolve_row_id(query_str, n_rows, meta, audio_field)
-    if rid is None:
-        st.warning(
-            "Could not resolve query. Enter a numeric row_id, full audio path, or filename "
-            "matching the audio-path metadata field."
-        )
-        return
+    pairs = cached["pairs"]
+    rid = cached["rid"]
+    score_label = "cosine" if cached["normalize"] else "L2²"
+    backend_kind = cached["backend"]
 
-    with st.spinner("Searching…"):
-        backend = _build_index(str(emb_p), emb_p.stat().st_mtime, normalize)
-        X = backend[2] if backend[0] == "faiss" else backend[1]
-        q = np.asarray(X[rid], dtype=np.float32)
-        idx, scores = _search(backend, k + 1, q, normalize)
-
-    pairs = [(int(i), float(s)) for i, s in zip(idx, scores) if int(i) != rid][:k]
     if not pairs:
         st.info("No results.")
         return
 
-    score_label = "cosine" if normalize else "L2²"
+    keep_cols = [c for c in [audio_field, *extra_cols] if c and c in meta.columns]
+    if dedupe_active and dedupe_field not in keep_cols:
+        keep_cols.append(dedupe_field)
+    keep_cols = list(dict.fromkeys(keep_cols))
+
+    sub = pd.DataFrame(
+        {"row_id": [p[0] for p in pairs], "_score": [p[1] for p in pairs]}
+    )
+    joined = sub.set_index("row_id").join(meta[keep_cols], how="left")
+    if dedupe_active:
+        joined = joined.dropna(subset=[dedupe_field]).drop_duplicates(
+            subset=[dedupe_field], keep="first"
+        )
+        if joined.empty:
+            st.info(f"No results with non-null `{dedupe_field}`.")
+            return
+
+    total = len(joined)
+    n_pages = max(1, (total + per_page - 1) // per_page)
+    cur_page = int(st.session_state.get(_PAGE_KEY, 1))
+    if cur_page > n_pages:
+        cur_page = 1
+        st.session_state[_PAGE_KEY] = 1
 
     if audio_field and audio_field in meta.columns and rid in meta.index:
-        st.caption(f"Query: row_id `{rid}` · `{meta.loc[rid, audio_field]}` · backend `{backend[0]}`")
+        st.caption(
+            f"Query: row_id `{rid}` · `{meta.loc[rid, audio_field]}` · backend `{backend_kind}`"
+        )
     else:
-        st.caption(f"Query: row_id `{rid}` · backend `{backend[0]}`")
+        st.caption(f"Query: row_id `{rid}` · backend `{backend_kind}`")
 
-    keep_cols = [c for c in [audio_field, *extra_cols] if c and c in meta.columns]
-    keep_cols = list(dict.fromkeys(keep_cols))
-    sub = pd.DataFrame({"row_id": [p[0] for p in pairs], "_score": [p[1] for p in pairs]})
-    joined = sub.set_index("row_id").join(meta[keep_cols], how="left")
+    pcol1, pcol2 = st.columns([1, 3])
+    page = pcol1.number_input(
+        "Page",
+        min_value=1,
+        max_value=n_pages,
+        value=cur_page,
+        step=1,
+        key=_PAGE_KEY,
+    )
+    start = (int(page) - 1) * per_page
+    end = start + per_page
+    pcol2.caption(
+        f"Showing {start + 1}–{min(end, total)} of {total}"
+        + (" (after dedupe)" if dedupe_active else "")
+        + f" · pool {len(pairs)}"
+    )
+    page_df = joined.iloc[start:end]
 
-    items = list(joined.iterrows())
+    items = list(page_df.iterrows())
     cols_per_row = 2
     for i in range(0, len(items), cols_per_row):
         cols = st.columns(cols_per_row, gap="medium")

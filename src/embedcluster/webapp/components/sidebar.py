@@ -11,7 +11,7 @@ from embedcluster.webapp import metadata_loader, run_loader
 from embedcluster.webapp.run_loader import RunSummary
 
 DEFAULT_RUNS_ROOT = "./runs"
-DEFAULT_METADATA_PATH = "/mnt/data_4tb/A-durfilter-highSNR/aggregated-embeddings/embeddings_cezanne.jsonl"
+DEFAULT_METADATA_PATH = ""
 
 
 @dataclass
@@ -26,7 +26,10 @@ class SidebarState:
 
 
 def _init_session_defaults() -> None:
-    st.session_state.setdefault("runs_root", DEFAULT_RUNS_ROOT)
+    st.session_state.setdefault(
+        "runs_root",
+        os.environ.get("EMBEDCLUSTER_RUNS_ROOT", DEFAULT_RUNS_ROOT),
+    )
     st.session_state.setdefault(
         "metadata_path",
         os.environ.get("EMBEDCLUSTER_METADATA_PATH", DEFAULT_METADATA_PATH),
