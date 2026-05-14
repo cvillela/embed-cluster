@@ -8,7 +8,6 @@ from pathlib import Path
 import streamlit as st
 
 from embedcluster.webapp import metadata_loader, run_loader
-from embedcluster.webapp.run_loader import RunSummary
 
 DEFAULT_RUNS_ROOT = "./runs"
 DEFAULT_METADATA_PATH = ""
@@ -45,7 +44,6 @@ def _reanchor_session_state() -> None:
 @dataclass
 class SidebarState:
     runs_root: Path
-    selected: RunSummary | None
     metadata_path: str
     umap_path: str
     embeddings_path: str
@@ -210,22 +208,6 @@ def render() -> SidebarState:
         st.text_input("Runs root", key="runs_root")
         runs_root = Path(st.session_state["runs_root"]).expanduser()
 
-        summaries = run_loader.discover_runs(runs_root)
-        if not summaries:
-            st.warning(f"No runs found under `{runs_root}`.")
-            selected: RunSummary | None = None
-        else:
-            labels = [
-                f"{s.name}  ({s.method}, N={s.n_rows:,}, k={s.n_clusters})"
-                for s in summaries
-            ]
-            names = [s.name for s in summaries]
-            prev = st.session_state.get("selected_run_name")
-            default_idx = names.index(prev) if prev in names else 0
-            chosen_label = st.selectbox("Run", labels, index=default_idx, key="run_selectbox")
-            selected = summaries[labels.index(chosen_label)]
-            st.session_state["selected_run_name"] = selected.name
-
         st.divider()
         st.header("External inputs")
         _path_input_with_browse(
@@ -253,7 +235,6 @@ def render() -> SidebarState:
 
     return SidebarState(
         runs_root=runs_root,
-        selected=selected,
         metadata_path=st.session_state["metadata_path"],
         umap_path=st.session_state["umap_path"],
         embeddings_path=st.session_state["embeddings_path"],

@@ -63,6 +63,7 @@ def _render_group(
     audio_field: str | None,
     extra_cols: list[str],
     members_per_page: int,
+    dedupe_field: str | None = None,
 ) -> None:
     members = bundle.members(int(dup_group_id))
     st.markdown(
@@ -71,11 +72,27 @@ def _render_group(
     )
 
     keep_cols = [c for c in [audio_field, *extra_cols] if c and c in meta.columns]
+    if dedupe_field and dedupe_field in meta.columns:
+        keep_cols.append(dedupe_field)
     keep_cols = list(dict.fromkeys(keep_cols))
     if keep_cols:
         joined = members.set_index("row_id").join(meta[keep_cols], how="left")
     else:
         joined = members.set_index("row_id")
+
+    if dedupe_field and dedupe_field in joined.columns:
+        before = len(joined)
+        sort_keys = (
+            ["is_canonical"] if "is_canonical" in joined.columns else []
+        )
+        if sort_keys:
+            joined = joined.sort_values(sort_keys, ascending=False, kind="stable")
+        joined = joined.drop_duplicates(subset=[dedupe_field], keep="first")
+        after = len(joined)
+        if after < before:
+            st.caption(
+                f"deduped by `{dedupe_field}`: {after} unique of {before} members"
+            )
 
     total = len(joined)
     n_pages = max(1, (total + int(members_per_page) - 1) // int(members_per_page))
@@ -186,7 +203,34 @@ def render(
         ),
     )
 
+    meta_field_choices = ["(off)"] + [str(c) for c in meta.columns]
+    dedupe_field_choice = st.selectbox(
+        "Dedupe by metadata field (one example per unique value)",
+        meta_field_choices,
+        index=0,
+        key="dup_dedupe_field",
+        help=(
+            "When set, each group shows only one member per unique value of "
+            "the chosen metadata field. Canonical row is kept when present. "
+            "Applies to all groups."
+        ),
+    )
+    dedupe_field = None if dedupe_field_choice == "(off)" else dedupe_field_choice
+
     filtered = groups[groups["group_size"] >= int(min_size)]
+
+    if dedupe_field and dedupe_field in meta.columns and not filtered.empty:
+        m = bundle.manifest
+        m = m[m["dup_group_id"].isin(filtered["dup_group_id"])]
+        joined_all = m.set_index("row_id").join(
+            meta[[dedupe_field]], how="left"
+        )
+        unique_per_group = joined_all.groupby("dup_group_id")[dedupe_field].nunique(
+            dropna=False
+        )
+        keep_ids = unique_per_group[unique_per_group >= 2].index
+        filtered = filtered[filtered["dup_group_id"].isin(keep_ids)]
+
     if sort_choice == "size desc":
         filtered = filtered.sort_values(
             ["group_size", "dup_group_id"], ascending=[False, True]
@@ -237,4 +281,5 @@ def render(
                 audio_field,
                 extra_cols,
                 members_per_page=int(members_per_page),
+                dedupe_field=dedupe_field,
             )

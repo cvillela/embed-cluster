@@ -47,16 +47,36 @@ def _hyperparam_keys(method: str, run_config: dict) -> list[str]:
     return list(run_config.keys())
 
 
+_PICKED_RUN_KEY = "selected_run_name"
+
+
 def render() -> None:
     st.title("embedcluster validation")
 
     state = sidebar.render()
 
-    if state.selected is None:
-        st.info("Select a run from the sidebar to begin.")
+    summaries = run_loader.discover_runs(state.runs_root)
+    if not summaries:
+        st.warning(f"No runs found under `{state.runs_root}`.")
         st.stop()
 
-    bundle = run_loader.load_run(state.selected.path)
+    labels = [
+        f"{s.name}  ({s.method}, N={s.n_rows:,}, k={s.n_clusters})"
+        for s in summaries
+    ]
+    names = [s.name for s in summaries]
+    prev = st.session_state.get(_PICKED_RUN_KEY)
+    default_idx = names.index(prev) if prev in names else 0
+    chosen_label = st.selectbox(
+        "Run",
+        labels,
+        index=default_idx,
+        key="run_selectbox",
+    )
+    selected = summaries[labels.index(chosen_label)]
+    st.session_state[_PICKED_RUN_KEY] = selected.name
+
+    bundle = run_loader.load_run(selected.path)
 
     c1, c2 = st.columns([1, 3])
     c1.metric("Method", bundle.method)
