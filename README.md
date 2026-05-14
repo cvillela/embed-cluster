@@ -12,7 +12,11 @@ Clusters embeddings stored in `embeddings.npy` (shape `[N, D]`) using three GPU-
 - **HDBSCAN** — optional PCA + L2 re-normalization → cuML HDBSCAN
 - **Spherical KMeans** — FAISS GPU spherical KMeans (cosine/directional)
 
-Every run writes row-aligned labels (`labels.parquet`), per-cluster summaries, and structured metadata to a run directory.
+Plus a separate **near-duplicate detection** pipeline:
+
+- **Dedupe** — chunked GPU range search (cupy matmul) → connected components → per-group canonical row
+
+Every clustering run writes row-aligned labels (`labels.parquet`), per-cluster summaries, and structured metadata to a run directory. Dedupe runs write a row-aligned manifest (`dedupe.parquet`).
 
 ---
 
@@ -149,9 +153,40 @@ Key parameters:
 
 ---
 
-## 9. Outputs
+## 9. Running near-duplicate detection
 
-Every run produces a canonical directory layout:
+```bash
+embedcluster dedupe \
+  --embeddings /data/embeddings.npy \
+  --out runs/dedupe_t098 \
+  --threshold 0.98
+
+# Or via script:
+python scripts/run_dedupe.py \
+  --embeddings /data/embeddings.npy \
+  --out runs/dedupe_t098 \
+  --threshold 0.98
+```
+
+GPU range search via chunked `cupy` matmul: returns every pair `(i, j)` with `cosine(X[i], X[j]) >= threshold`. Connected components over those pairs identifies duplicate groups. The canonical row per group is the smallest `row_id`.
+
+Operates on `embeddings.npy` alone — does **not** require `metadata.jsonl` and is independent of any clustering run. Recommended as a **pre-clustering** step: removing duplicates before clustering avoids cluster-mass distortion and inflated modularity.
+
+Key parameters:
+
+```
+--threshold FLOAT    cosine similarity threshold (default: 0.98)
+--chunk-size INT     query rows per matmul chunk; controls VRAM
+                     (default: 2048, sized for 16 GB GPUs)
+```
+
+Bigger GPUs: raise `--chunk-size` for fewer iterations (linear speedup). Smaller GPUs: lower it.
+
+---
+
+## 10. Outputs
+
+Every clustering run produces a canonical directory layout:
 
 ```
 runs/<run_name>/
@@ -196,9 +231,30 @@ Additional method-specific columns:
 | HDBSCAN  | `probability` |
 | KMeans   | `cosine_to_centroid` |
 
+Dedupe runs use a different layout:
+
+```
+runs/<run_name>/
+  run_config.json     — pipeline configuration (threshold, chunk_size, N, D)
+  metrics.json        — n_edges, n_groups, n_multi_member_groups,
+                        n_duplicate_rows, n_canonical_rows, n_removable_rows
+  dedupe.parquet      — one row per embedding (singletons included)
+  logs/run.log
+```
+
+`dedupe.parquet` columns:
+
+```
+row_id          — integer index aligned to embedding row
+dup_group_id    — connected-component id (singletons get a unique id)
+group_size      — number of rows in this group
+is_canonical    — true for one row per group (smallest row_id);
+                  always true for singletons
+```
+
 ---
 
-## 10. Joining labels back to metadata
+## 11. Joining labels back to metadata
 
 Labels are row-aligned: `labels.parquet.row_id[i]` corresponds to `metadata.jsonl` line `i`.
 
@@ -226,12 +282,25 @@ embedcluster leiden \
 # writes: runs/leiden_k50_res1/metadata_with_labels.jsonl
 ```
 
+**Filter to deduplicated (canonical) rows:**
+
+```python
+import pandas as pd
+
+dedupe = pd.read_parquet("runs/dedupe_t098/dedupe.parquet")
+canonical = dedupe[dedupe["is_canonical"]]
+canonical_row_ids = canonical["row_id"].to_numpy()
+# Use canonical_row_ids to index embeddings.npy or filter metadata.jsonl
+# by row_id before re-running a clustering pipeline.
+```
+
 ---
 
-## 11. Known limitations
+## 12. Known limitations
 
 - **cuML HDBSCAN** requires the full working matrix (post-PCA if enabled) in GPU VRAM. For large N and high-dimensional embeddings without PCA, memory requirements can be substantial. Use `--pca-components 128` (the default) to reduce VRAM usage.
 - **FAISS KMeans training** sub-samples up to `256 × k` rows. For large N, training quality depends on the sub-sample being representative. Assignments are always done over all rows in batches.
 - **cuVS brute-force kNN** (Leiden pipeline) loads the full matrix plus k-neighbor buffers to VRAM. For N > 5M at D=1536, verify available VRAM with `preflight.json` before running.
 - **Silhouette score** (`sampled_silhouette` in `metrics.json`) is computed on a CPU sample of up to `--sample-metrics` rows using cosine distance. It is skipped automatically if `sklearn` is unavailable or if the number of clusters is too small.
 - Intermediate files (`knn_indices.npy`, `normalized.npy`, etc.) are reused across re-runs with the same output directory. Changing `--k` or `--normalize` requires a fresh `--out` path.
+- **Dedupe** loads the full embedding matrix into VRAM and scores `chunk_size` query rows against all `N` rows per matmul. Peak VRAM ≈ `N * D * 4` (resident X) + `chunk_size * N * 4` (scores buffer) + temps. At `chunk_size=2048`, `D=1536`, `N=434k` this is ~8 GB. Lower `--chunk-size` on smaller GPUs; raise it on bigger ones for fewer iterations.

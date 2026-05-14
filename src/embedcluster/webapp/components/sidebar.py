@@ -13,6 +13,34 @@ from embedcluster.webapp.run_loader import RunSummary
 DEFAULT_RUNS_ROOT = "./runs"
 DEFAULT_METADATA_PATH = ""
 
+_PERSIST_KEYS = (
+    "runs_root",
+    "metadata_path",
+    "umap_path",
+    "embeddings_path",
+    "audio_field",
+    "extra_metadata_cols",
+    "selected_run_name",
+    "dedupe_picked_run_name",
+    "dedupe_emb_path",
+    "dedupe_threshold",
+    "dedupe_chunk_size",
+    "dedupe_out_name",
+    "dedupe_last_launched_out",
+)
+
+
+def _reanchor_session_state() -> None:
+    """Force-rebind keys so streamlit retains them across page switches.
+
+    Streamlit can clear widget-keyed session_state when a widget unmounts
+    (e.g. switching pages). Reassigning to itself anchors the value for the
+    next rerun.
+    """
+    for k in _PERSIST_KEYS:
+        if k in st.session_state:
+            st.session_state[k] = st.session_state[k]
+
 
 @dataclass
 class SidebarState:
@@ -162,11 +190,12 @@ def _metadata_controls(metadata_path: str) -> tuple[str | None, list[str]]:
     audio_field = st.selectbox("audio-path field", candidates, index=default_idx, key="audio_field")
 
     other_cols = [c for c in meta.columns if c not in {audio_field, "row_id"}]
-    prev_extra = [c for c in st.session_state.get("extra_metadata_cols", []) if c in other_cols]
+    st.session_state["extra_metadata_cols"] = [
+        c for c in st.session_state.get("extra_metadata_cols", []) if c in other_cols
+    ]
     extra = st.multiselect(
         "extra metadata columns",
         other_cols,
-        default=prev_extra,
         key="extra_metadata_cols",
     )
     return audio_field, list(extra)
@@ -174,6 +203,7 @@ def _metadata_controls(metadata_path: str) -> tuple[str | None, list[str]]:
 
 def render() -> SidebarState:
     _init_session_defaults()
+    _reanchor_session_state()
 
     with st.sidebar:
         st.header("Run")

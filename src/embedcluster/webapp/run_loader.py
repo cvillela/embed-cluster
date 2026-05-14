@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 REQUIRED_FILES = ("run_config.json", "labels.parquet")
+DEDUPE_REQUIRED_FILES = ("run_config.json", "dedupe.parquet")
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,20 @@ class RunSummary:
     mtime: float
 
 
+@dataclass(frozen=True)
+class DedupeRunSummary:
+    name: str
+    path: Path
+    threshold: float
+    n_rows: int
+    n_groups: int
+    n_multi_member_groups: int
+    n_duplicate_rows: int
+    n_removable_rows: int
+    n_edges: int
+    mtime: float
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     with path.open() as f:
         return json.load(f)
@@ -30,6 +45,10 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _is_run_dir(p: Path) -> bool:
     return p.is_dir() and all((p / f).exists() for f in REQUIRED_FILES)
+
+
+def _is_dedupe_run_dir(p: Path) -> bool:
+    return p.is_dir() and all((p / f).exists() for f in DEDUPE_REQUIRED_FILES)
 
 
 def discover_runs(runs_root: Path) -> list[RunSummary]:
@@ -132,5 +151,128 @@ def load_run(path: Path) -> RunBundle:
     return _load_run_cached(str(path), mtime)
 
 
+def discover_dedupe_runs(runs_root: Path) -> list[DedupeRunSummary]:
+    """List dedupe runs under ``runs_root``, sorted by mtime desc.
+
+    A dedupe run is any subdir containing ``run_config.json`` whose ``pipeline``
+    is ``dedupe`` and ``dedupe.parquet``.
+    """
+    runs_root = Path(runs_root)
+    if not runs_root.exists() or not runs_root.is_dir():
+        return []
+    out: list[DedupeRunSummary] = []
+    for child in sorted(runs_root.iterdir()):
+        if not _is_dedupe_run_dir(child):
+            continue
+        cfg_path = child / "run_config.json"
+        metrics_path = child / "metrics.json"
+        try:
+            cfg = _read_json(cfg_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if cfg.get("pipeline") != "dedupe":
+            continue
+        try:
+            metrics = _read_json(metrics_path) if metrics_path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            metrics = {}
+        out.append(
+            DedupeRunSummary(
+                name=child.name,
+                path=child,
+                threshold=float(cfg.get("threshold", metrics.get("threshold", 0.0))),
+                n_rows=int(metrics.get("n_rows", cfg.get("n_rows", 0))),
+                n_groups=int(metrics.get("n_groups", 0)),
+                n_multi_member_groups=int(metrics.get("n_multi_member_groups", 0)),
+                n_duplicate_rows=int(metrics.get("n_duplicate_rows", 0)),
+                n_removable_rows=int(metrics.get("n_removable_rows", 0)),
+                n_edges=int(metrics.get("n_edges", 0)),
+                mtime=cfg_path.stat().st_mtime,
+            )
+        )
+    out.sort(key=lambda r: r.mtime, reverse=True)
+    return out
+
+
+class DedupeBundle:
+    """Lazy loader for a dedupe run directory."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self.run_config: dict[str, Any] = _read_json(self.path / "run_config.json")
+        m_path = self.path / "metrics.json"
+        self.metrics: dict[str, Any] = _read_json(m_path) if m_path.exists() else {}
+        self._manifest: pd.DataFrame | None = None
+        self._groups: pd.DataFrame | None = None
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    @property
+    def threshold(self) -> float:
+        return float(
+            self.run_config.get(
+                "threshold", self.metrics.get("threshold", 0.0)
+            )
+        )
+
+    @property
+    def manifest(self) -> pd.DataFrame:
+        """Per-row dedupe table: row_id, dup_group_id, group_size, is_canonical."""
+        if self._manifest is None:
+            self._manifest = pd.read_parquet(self.path / "dedupe.parquet")
+        return self._manifest
+
+    @property
+    def groups(self) -> pd.DataFrame:
+        """Per-group view (multi-member only): dup_group_id, group_size, canonical_row_id."""
+        if self._groups is None:
+            m = self.manifest
+            multi = m[m["group_size"] > 1]
+            if multi.empty:
+                self._groups = pd.DataFrame(
+                    columns=["dup_group_id", "group_size", "canonical_row_id"]
+                )
+            else:
+                canonical_map = (
+                    multi[multi["is_canonical"]]
+                    .groupby("dup_group_id")["row_id"]
+                    .first()
+                    .rename("canonical_row_id")
+                )
+                size_map = multi.groupby("dup_group_id")["group_size"].first()
+                self._groups = pd.DataFrame(
+                    {
+                        "dup_group_id": size_map.index,
+                        "group_size": size_map.values,
+                        "canonical_row_id": canonical_map.reindex(
+                            size_map.index
+                        ).values,
+                    }
+                ).sort_values(
+                    ["group_size", "dup_group_id"], ascending=[False, True]
+                ).reset_index(drop=True)
+        return self._groups
+
+    def members(self, dup_group_id: int) -> pd.DataFrame:
+        m = self.manifest
+        return m[m["dup_group_id"] == dup_group_id].sort_values(
+            ["is_canonical", "row_id"], ascending=[False, True]
+        )
+
+
+@st.cache_resource(show_spinner=False)
+def _load_dedupe_cached(path_str: str, mtime: float) -> DedupeBundle:
+    return DedupeBundle(Path(path_str))
+
+
+def load_dedupe_run(path: Path) -> DedupeBundle:
+    path = Path(path)
+    mtime = (path / "run_config.json").stat().st_mtime
+    return _load_dedupe_cached(str(path), mtime)
+
+
 def clear_cache() -> None:
     _load_run_cached.clear()
+    _load_dedupe_cached.clear()

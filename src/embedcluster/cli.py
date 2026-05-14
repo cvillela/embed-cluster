@@ -162,6 +162,37 @@ def kmeans(
     run_kmeans_pipeline(shared_cfg, kmeans_cfg, run_paths, dataset_info)
 
 
+@app.command()
+def dedupe(
+    embeddings: Path = typer.Option(..., "--embeddings", exists=False, dir_okay=False),
+    out: Path = typer.Option(..., "--out", file_okay=False),
+    threshold: float = typer.Option(0.98, "--threshold"),
+    chunk_size: int = typer.Option(2048, "--chunk-size"),
+):
+    """Find near-duplicate embeddings via GPU range search + connected components.
+
+    Writes ``dedupe.parquet`` (row_id, dup_group_id, group_size, is_canonical)
+    plus ``run_config.json`` and ``metrics.json``. Singletons are kept in the
+    manifest with ``is_canonical=True`` so downstream joins are trivial.
+
+    --chunk-size controls VRAM use: chunk * N * 4 bytes for the scores buffer
+    plus ~2 * (N * D * 4) for X and temps. Default tuned for 16 GB GPUs;
+    raise on bigger cards for fewer chunks (linear speedup).
+    """
+    if not (0.0 < threshold <= 1.0):
+        raise typer.BadParameter("--threshold must be in (0, 1]")
+    if chunk_size <= 0:
+        raise typer.BadParameter("--chunk-size must be positive")
+    from .dedupe import run_dedupe
+
+    run_dedupe(
+        embeddings_path=embeddings,
+        out=out,
+        threshold=threshold,
+        chunk_size=chunk_size,
+    )
+
+
 def main() -> None:
     app()
 

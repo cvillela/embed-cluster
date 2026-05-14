@@ -86,6 +86,15 @@ def _resolve_row_id(value: str, n_rows: int, meta: pd.DataFrame, audio_field: st
     return None
 
 
+def _fmt_cluster(cid) -> str:
+    if cid is None:
+        return "—"
+    try:
+        return str(int(cid))
+    except (TypeError, ValueError):
+        return str(cid)
+
+
 def _render_result_card(
     row_id: int,
     row: pd.Series,
@@ -93,6 +102,7 @@ def _render_result_card(
     extra_cols: list[str],
     score_label: str,
     score_value: float,
+    cluster_id=None,
 ) -> None:
     raw = row.get(audio_field)
     has_path = isinstance(raw, str) and bool(raw)
@@ -100,7 +110,10 @@ def _render_result_card(
     title = resolved.name if resolved is not None else "(no path)"
 
     st.markdown(f"**{title}**")
-    st.caption(f"`row_id` `{row_id}` · `{score_label}` `{score_value:.4f}`")
+    st.caption(
+        f"`row_id` `{row_id}` · `cluster` `{_fmt_cluster(cluster_id)}` · "
+        f"`{score_label}` `{score_value:.4f}`"
+    )
 
     if not has_path:
         st.warning("missing audio path in metadata")
@@ -258,12 +271,25 @@ def render(
         cur_page = 1
         st.session_state[_PAGE_KEY] = 1
 
+    cluster_series = bundle.labels.set_index("row_id")["cluster_id"]
+
+    def _cluster_for(r: int):
+        try:
+            return cluster_series.at[r]
+        except KeyError:
+            return None
+
+    q_cluster = _cluster_for(rid)
     if audio_field and audio_field in meta.columns and rid in meta.index:
         st.caption(
-            f"Query: row_id `{rid}` · `{meta.loc[rid, audio_field]}` · backend `{backend_kind}`"
+            f"Query: row_id `{rid}` · cluster `{_fmt_cluster(q_cluster)}` · "
+            f"`{meta.loc[rid, audio_field]}` · backend `{backend_kind}`"
         )
     else:
-        st.caption(f"Query: row_id `{rid}` · backend `{backend_kind}`")
+        st.caption(
+            f"Query: row_id `{rid}` · cluster `{_fmt_cluster(q_cluster)}` · "
+            f"backend `{backend_kind}`"
+        )
 
     pcol1, pcol2 = st.columns([1, 3])
     page = pcol1.number_input(
@@ -297,5 +323,6 @@ def render(
                         extra_cols,
                         score_label,
                         float(row["_score"]),
+                        cluster_id=_cluster_for(int(row_id)),
                     )
         st.write("")

@@ -18,3 +18,11 @@
  12-05-2026 11:48:43:296 [pid=3506220 tid=3506220] ERROR  cufio-fs:79 mount option not found in mount table data device: /dev/nvme0n1p2
  12-05-2026 18:54:45:295 [pid=14093 tid=14093] NOTICE  cufio-drv:720 running in compatible mode
  12-05-2026 18:54:45:540 [pid=14093 tid=14093] ERROR  cufio-fs:79 mount option not found in mount table data device: /dev/nvme1n1p2
+ 13-05-2026 21:52:21:19 [pid=8481 tid=8481] NOTICE  cufio-drv:720 running in compatible mode
+ 13-05-2026 21:52:21:261 [pid=8481 tid=8481] ERROR  cufio-fs:79 mount option not found in mount table data device: /dev/nvme1n1p2
+ 13-05-2026 22:12:57:920 [pid=10795 tid=10795] NOTICE  cufio-drv:720 running in compatible mode
+ 13-05-2026 22:12:58:166 [pid=10795 tid=10795] ERROR  cufio-fs:79 mount option not found in mount table data device: /dev/nvme1n1p2
+ 13-05-2026 22:13:42:327 [pid=10885 tid=10885] NOTICE  cufio-drv:720 running in compatible mode
+ 13-05-2026 22:13:42:570 [pid=10885 tid=10885] ERROR  cufio-fs:79 mount option not found in mount table data device: /dev/nvme1n1p2
+ 13-05-2026 22:14:26:572 [pid=11005 tid=11005] NOTICE  cufio-drv:720 running in compatible mode
+ 13-05-2026 22:14:26:810 [pid=11005 tid=11005] ERROR  cufio-fs:79 mount option not found in mount table data device: /dev/nvme1n1p2
