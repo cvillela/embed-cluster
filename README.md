@@ -20,16 +20,7 @@ Every clustering run writes row-aligned labels (`labels.parquet`), per-cluster s
 
 ---
 
-## 2. What this repo does not do
-
-- Does **not** load audio, images, or raw media.
-- Does **not** extract, compute, or fine-tune embeddings.
-- Does **not** install RAPIDS.
-- Does **not** select CUDA versions or manage drivers.
-
----
-
-## 3. Input file requirements
+## 2. Input file requirements
 
 ```
 embeddings.npy    — shape [N, D], dtype float16/float32/float64
@@ -41,7 +32,7 @@ metadata.jsonl    — exactly N newline-delimited JSON objects (one per embeddin
 
 ---
 
-## 4. Dependency assumptions
+## 3. Dependency assumptions
 
 This repository assumes:
 
@@ -58,7 +49,7 @@ pip install -e .
 
 ---
 
-## 5. Running validation
+## 4. Running validation
 
 ```bash
 embedcluster --help
@@ -72,7 +63,7 @@ Validation checks: file existence, 2D shape, supported dtype (float16/32/64), me
 
 ---
 
-## 6. Running Leiden
+## 5. Running Leiden
 
 ```bash
 embedcluster leiden \
@@ -97,7 +88,7 @@ Key parameters:
 
 ---
 
-## 7. Running HDBSCAN
+## 6. Running HDBSCAN
 
 ```bash
 embedcluster hdbscan \
@@ -125,7 +116,7 @@ Key parameters:
 
 ---
 
-## 8. Running FAISS Spherical KMeans
+## 7. Running FAISS Spherical KMeans
 
 ```bash
 embedcluster kmeans \
@@ -153,7 +144,7 @@ Key parameters:
 
 ---
 
-## 9. Running near-duplicate detection
+## 8. Running near-duplicate detection
 
 ```bash
 embedcluster dedupe \
@@ -184,7 +175,7 @@ Bigger GPUs: raise `--chunk-size` for fewer iterations (linear speedup). Smaller
 
 ---
 
-## 10. Outputs
+## 9. Outputs
 
 Every clustering run produces a canonical directory layout:
 
@@ -254,7 +245,7 @@ is_canonical    — true for one row per group (smallest row_id);
 
 ---
 
-## 11. Joining labels back to metadata
+## 10. Joining labels back to metadata
 
 Labels are row-aligned: `labels.parquet.row_id[i]` corresponds to `metadata.jsonl` line `i`.
 
@@ -296,7 +287,7 @@ canonical_row_ids = canonical["row_id"].to_numpy()
 
 ---
 
-## 12. Known limitations
+## 11. Known limitations
 
 - **cuML HDBSCAN** requires the full working matrix (post-PCA if enabled) in GPU VRAM. For large N and high-dimensional embeddings without PCA, memory requirements can be substantial. Use `--pca-components 128` (the default) to reduce VRAM usage.
 - **FAISS KMeans training** sub-samples up to `256 × k` rows. For large N, training quality depends on the sub-sample being representative. Assignments are always done over all rows in batches.
