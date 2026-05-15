@@ -175,7 +175,135 @@ Bigger GPUs: raise `--chunk-size` for fewer iterations (linear speedup). Smaller
 
 ---
 
-## 9. Outputs
+## 9. Applying dedupe results (removing duplicates)
+
+A separate pipeline consumes the manifest from a prior `dedupe` run and writes
+stripped `deduped_embeddings.npy` + `deduped_embeddings.jsonl` files. Row
+removal is exact-index based: identical positions are dropped from both
+artifacts in lockstep.
+
+```bash
+embedcluster dedupe-remove \
+  --embeddings /data/embeddings.npy \
+  --metadata   /data/metadata.jsonl \
+  --manifest   runs/dedupe_t098/dedupe.parquet \
+  --out        /data/deduped/dedupe_t098__remove_canonical \
+  --strategy   canonical
+
+# Or via script:
+python scripts/run_dedupe_remove.py \
+  --embeddings /data/embeddings.npy \
+  --metadata   /data/metadata.jsonl \
+  --manifest   runs/dedupe_t098/dedupe.parquet \
+  --out        /data/deduped/dedupe_t098__remove_canonical \
+  --strategy   canonical
+```
+
+Strategies (`--strategy`, one per run):
+
+| Strategy   | Behavior |
+|------------|----------|
+| `canonical` | Keep canonical row only per multi-member group. |
+| `metadata`  | Keep canonical + members whose `--metadata-field` value matches the canonical row's value. Optionally stack `--k` to additionally cap each group to canonical + (K−1) same-field members ranked by `--selection`. |
+| `duration`  | Keep top-K by `(end_s − start_s)` per group, ordered by `--duration-order`. Canonical not forced. Requires `--k`. |
+| `limit-k`   | Keep canonical + (K−1) non-canonical members ranked by `--selection` cosine to the canonical embedding. Requires `--k`. |
+
+Singletons (`group_size == 1`) are always kept. Total per group includes the
+canonical row when applicable.
+
+Key parameters:
+
+```
+--metadata-field NAME     metadata key to match against canonical's value (strategy=metadata)
+--duration-order longest|shortest    sort order for strategy=duration
+--k INT                   total rows kept per multi-member group
+                          (required for duration/limit-k; optional stack on metadata)
+--selection most_similar|most_distant|random
+                          member ranking for limit-k and stacked metadata+k
+--random-state INT        RNG seed for selection=random (default: 42)
+--write-chunk INT         rows per chunk when writing deduped_embeddings.npy
+                          (default: 4096)
+```
+
+Outputs (under `--out`):
+
+```
+deduped_embeddings.npy     stripped float32 array, original row order
+deduped_embeddings.jsonl   metadata for kept rows, original line order
+kept_indices.npy           int64 original row indices retained
+removed_indices.json       audit log: row_id, dup_group_id, reason, file, filepath
+run_config.json            inputs (strategy params, source paths, kept/removed counts)
+metrics.json               summary counts
+logs/run.log               structured run log
+```
+
+Examples:
+
+```bash
+# Keep canonical + same-language members per group
+embedcluster dedupe-remove ... --strategy metadata --metadata-field lang
+
+# Same as above, plus cap each group to canonical + 2 most-similar same-lang members
+embedcluster dedupe-remove ... --strategy metadata --metadata-field lang \
+  --k 3 --selection most_similar
+
+# Keep top-2 longest segments per group
+embedcluster dedupe-remove ... --strategy duration --duration-order longest --k 2
+
+# Keep canonical + 4 most-distant non-canonical members (diverse retention)
+embedcluster dedupe-remove ... --strategy limit-k --k 5 --selection most_distant
+```
+
+---
+
+## 10. Webapp (interactive browser + launcher)
+
+A Streamlit app provides an interactive view over clustering and dedupe runs,
+including launchers for the `dedupe` and `dedupe-remove` pipelines.
+
+```bash
+# Install webapp extras (Streamlit, plotly, etc.)
+pip install -r requirements-webapp.txt
+
+# Launch
+bash scripts/run_webapp.sh
+# Or directly:
+python -m streamlit run src/embedcluster/webapp/app.py
+```
+
+Pages:
+
+- **Cluster** — pick any clustering run under the runs root, browse clusters,
+  audition member audio, inspect per-row similarity, view UMAP scatter.
+- **Dedupe** — pick a dedupe run, browse duplicate groups with audio
+  audition. Includes:
+  - **Run new dedupe** launcher — spawns `embedcluster dedupe` as a detached
+    background subprocess; tails the run log and surfaces completion in-page.
+  - **Apply dedupe (remove duplicates)** launcher — exposes all four
+    strategies with conditional widgets (metadata field picker, duration
+    order, K, selection). Output directory is a free-form absolute path,
+    defaulting to `<embeddings_dir>/deduped/<run>__remove_<strategy>`.
+    Spawns `embedcluster dedupe-remove` in the background, tails its log,
+    lists output paths on completion.
+
+Sidebar inputs (persisted across page switches):
+
+```
+Runs root           directory containing pipeline run dirs (default: ./runs)
+metadata.jsonl      path used for audio audition + metadata-field selection
+umap_6d.npy         optional; enables UMAP scatter on the Cluster page
+embeddings .npy     used by the dedupe launcher and similarity panel
+audio-path field    metadata key resolving to playable audio files
+extra metadata cols additional columns to surface in audio cards
+```
+
+Defaults can be pre-set via env vars: `EMBEDCLUSTER_RUNS_ROOT`,
+`EMBEDCLUSTER_METADATA_PATH`, `EMBEDCLUSTER_UMAP_PATH`,
+`EMBEDCLUSTER_EMBEDDINGS_PATH`.
+
+---
+
+## 11. Outputs
 
 Every clustering run produces a canonical directory layout:
 
@@ -245,7 +373,7 @@ is_canonical    — true for one row per group (smallest row_id);
 
 ---
 
-## 10. Joining labels back to metadata
+## 12. Joining labels back to metadata
 
 Labels are row-aligned: `labels.parquet.row_id[i]` corresponds to `metadata.jsonl` line `i`.
 
@@ -287,7 +415,7 @@ canonical_row_ids = canonical["row_id"].to_numpy()
 
 ---
 
-## 11. Known limitations
+## 13. Known limitations
 
 - **cuML HDBSCAN** requires the full working matrix (post-PCA if enabled) in GPU VRAM. For large N and high-dimensional embeddings without PCA, memory requirements can be substantial. Use `--pca-components 128` (the default) to reduce VRAM usage.
 - **FAISS KMeans training** sub-samples up to `256 × k` rows. For large N, training quality depends on the sub-sample being representative. Assignments are always done over all rows in batches.
@@ -295,3 +423,4 @@ canonical_row_ids = canonical["row_id"].to_numpy()
 - **Silhouette score** (`sampled_silhouette` in `metrics.json`) is computed on a CPU sample of up to `--sample-metrics` rows using cosine distance. It is skipped automatically if `sklearn` is unavailable or if the number of clusters is too small.
 - Intermediate files (`knn_indices.npy`, `normalized.npy`, etc.) are reused across re-runs with the same output directory. Changing `--k` or `--normalize` requires a fresh `--out` path.
 - **Dedupe** loads the full embedding matrix into VRAM and scores `chunk_size` query rows against all `N` rows per matmul. Peak VRAM ≈ `N * D * 4` (resident X) + `chunk_size * N * 4` (scores buffer) + temps. At `chunk_size=2048`, `D=1536`, `N=434k` this is ~8 GB. Lower `--chunk-size` on smaller GPUs; raise it on bigger ones for fewer iterations.
+- **Dedupe-remove** is single-process CPU + memory-mapped IO. The output `.npy` is written in chunks via `np.lib.format.open_memmap` (controlled by `--write-chunk`), so peak RAM stays low even for large N. The metadata JSONL is streamed line-by-line, with `row_id` assumed equal to the line index — re-running `dedupe-remove` on an already-stripped metadata file will misalign rows.
