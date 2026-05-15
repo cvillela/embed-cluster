@@ -161,6 +161,86 @@ def start_dedupe_job(
     return status
 
 
+_PIPELINE_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "dedupe": ("dedupe.parquet", "metrics.json"),
+    "dedupe-remove": (
+        "deduped_embeddings.npy",
+        "deduped_embeddings.jsonl",
+        "kept_indices.npy",
+        "metrics.json",
+    ),
+}
+
+
+def _success_artifacts(out_dir: Path) -> tuple[str, ...]:
+    """Pick the artifact list to validate based on this run's pipeline tag."""
+    cfg_path = Path(out_dir) / "run_config.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text())
+            pipe = cfg.get("pipeline")
+            if pipe in _PIPELINE_ARTIFACTS:
+                return _PIPELINE_ARTIFACTS[pipe]
+        except (OSError, json.JSONDecodeError):
+            pass
+    return ("metrics.json",)
+
+
+def start_dedupe_remove_job(
+    embeddings_path: Path,
+    metadata_path: Path,
+    manifest_path: Path,
+    out_dir: Path,
+    strategy: str,
+    metadata_field: Optional[str] = None,
+    duration_order: str = "longest",
+    k: Optional[int] = None,
+    selection: str = "most_similar",
+    random_state: int = 42,
+    write_chunk: int = 4096,
+) -> JobStatus:
+    """Spawn ``embedcluster dedupe-remove`` as detached process."""
+    out_dir = Path(out_dir)
+    log_path = out_dir / "logs" / "run.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m",
+        "embedcluster",
+        "dedupe-remove",
+        "--embeddings", str(embeddings_path),
+        "--metadata", str(metadata_path),
+        "--manifest", str(manifest_path),
+        "--out", str(out_dir),
+        "--strategy", strategy,
+        "--duration-order", duration_order,
+        "--selection", selection,
+        "--random-state", str(random_state),
+        "--write-chunk", str(write_chunk),
+    ]
+    if metadata_field:
+        cmd += ["--metadata-field", metadata_field]
+    if k is not None:
+        cmd += ["--k", str(int(k))]
+    log_fh = open(log_path, "ab")
+    proc = subprocess.Popen(  # noqa: S603
+        cmd,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        cwd=str(Path.cwd()),
+    )
+    status = JobStatus(
+        pid=proc.pid,
+        out=str(out_dir),
+        log=str(log_path),
+        cmd=cmd,
+        started=time.time(),
+    )
+    write_status(out_dir, status)
+    return status
+
+
 def reconcile(out_dir: Path) -> Optional[JobStatus]:
     """Refresh status for a run dir.
 
@@ -175,9 +255,8 @@ def reconcile(out_dir: Path) -> Optional[JobStatus]:
     if is_running(status.pid):
         return status
     status.finished = time.time()
-    artifacts = (Path(out_dir) / "dedupe.parquet").exists() and (
-        Path(out_dir) / "metrics.json"
-    ).exists()
+    out_path = Path(out_dir)
+    artifacts = all((out_path / a).exists() for a in _success_artifacts(out_path))
     status.returncode = 0 if artifacts else 1
     write_status(out_dir, status)
     return status

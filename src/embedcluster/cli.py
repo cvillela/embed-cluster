@@ -193,6 +193,63 @@ def dedupe(
     )
 
 
+@app.command("dedupe-remove")
+def dedupe_remove(
+    embeddings: Path = typer.Option(..., "--embeddings", exists=False, dir_okay=False),
+    metadata: Path = typer.Option(..., "--metadata", exists=False, dir_okay=False),
+    manifest: Path = typer.Option(..., "--manifest", exists=False, dir_okay=False),
+    out: Path = typer.Option(..., "--out", file_okay=False),
+    strategy: str = typer.Option(..., "--strategy"),
+    metadata_field: Optional[str] = typer.Option(None, "--metadata-field"),
+    duration_order: str = typer.Option("longest", "--duration-order"),
+    k: Optional[int] = typer.Option(None, "--k"),
+    selection: str = typer.Option("most_similar", "--selection"),
+    random_state: int = typer.Option(42, "--random-state"),
+    write_chunk: int = typer.Option(4096, "--write-chunk"),
+):
+    """Apply a dedupe manifest to produce deduped_embeddings.npy + .jsonl.
+
+    Strategies (one per run):
+      canonical | metadata | duration | limit-k. See module docstring for
+      semantics. ``--k`` is required for duration / limit-k and optional for
+      metadata (stacks limit-k on the same-field survivors).
+    """
+    if strategy not in ("canonical", "metadata", "duration", "limit-k"):
+        raise typer.BadParameter(
+            "--strategy must be canonical|metadata|duration|limit-k"
+        )
+    if duration_order not in ("longest", "shortest"):
+        raise typer.BadParameter("--duration-order must be longest|shortest")
+    if selection not in ("most_similar", "most_distant", "random"):
+        raise typer.BadParameter(
+            "--selection must be most_similar|most_distant|random"
+        )
+    if strategy == "metadata" and not metadata_field:
+        raise typer.BadParameter("--metadata-field required for strategy=metadata")
+    if strategy in ("duration", "limit-k") and (k is None or k < 1):
+        raise typer.BadParameter(f"--k (>=1) required for strategy={strategy}")
+    if strategy == "metadata" and k is not None and k < 1:
+        raise typer.BadParameter("--k must be >= 1 when stacked on metadata")
+    if write_chunk <= 0:
+        raise typer.BadParameter("--write-chunk must be positive")
+
+    from .dedupe_remove import run_dedupe_remove
+
+    run_dedupe_remove(
+        embeddings_path=embeddings,
+        metadata_path=metadata,
+        manifest_path=manifest,
+        out=out,
+        strategy=strategy,  # type: ignore[arg-type]
+        metadata_field=metadata_field,
+        duration_order=duration_order,  # type: ignore[arg-type]
+        k=k,
+        selection=selection,  # type: ignore[arg-type]
+        random_state=random_state,
+        write_chunk=write_chunk,
+    )
+
+
 def main() -> None:
     app()
 

@@ -26,6 +26,16 @@ _PERSIST_KEYS = (
     "dedupe_chunk_size",
     "dedupe_out_name",
     "dedupe_last_launched_out",
+    "dedupe_remove_strategy",
+    "dedupe_remove_metadata_field",
+    "dedupe_remove_meta_use_k",
+    "dedupe_remove_duration_order",
+    "dedupe_remove_k",
+    "dedupe_remove_selection",
+    "dedupe_remove_random_state",
+    "dedupe_remove_out_dir",
+    "dedupe_remove_out_dir_pending",
+    "dedupe_remove_last_launched_out",
 )
 
 

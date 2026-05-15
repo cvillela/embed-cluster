@@ -96,8 +96,12 @@ def render(
 
     with st.expander("Run new dedupe", expanded=True):
         active = jobs.find_active_jobs(runs_root)
-        if active:
-            status = jobs.reconcile(Path(active[0].out)) or active[0]
+        active_dedupe = [
+            s for s in active
+            if "dedupe" in s.cmd and "dedupe-remove" not in s.cmd
+        ]
+        if active_dedupe:
+            status = jobs.reconcile(Path(active_dedupe[0].out)) or active_dedupe[0]
             _render_status(status, Path(status.out))
             time.sleep(_REFRESH_SECONDS)
             st.rerun()

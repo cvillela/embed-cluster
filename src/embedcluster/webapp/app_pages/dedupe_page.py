@@ -11,7 +11,12 @@ from __future__ import annotations
 import streamlit as st
 
 from embedcluster.webapp import run_loader
-from embedcluster.webapp.components import dedupe_launcher, dup_group_panel, sidebar
+from embedcluster.webapp.components import (
+    dedupe_launcher,
+    dedupe_remove_launcher,
+    dup_group_panel,
+    sidebar,
+)
 
 
 _PICKED_RUN_KEY = "dedupe_picked_run_name"
@@ -64,6 +69,16 @@ def render() -> None:
     st.session_state[_PICKED_RUN_KEY] = selected.name
 
     bundle = run_loader.load_dedupe_run(selected.path)
+
+    dedupe_remove_launcher.render(
+        embeddings_path=state.embeddings_path,
+        metadata_path=state.metadata_path,
+        dedupe_run_name=selected.name,
+        manifest_path=selected.path / "dedupe.parquet",
+    )
+
+    st.divider()
+
     dup_group_panel.render(
         bundle=bundle,
         metadata_path=state.metadata_path,
